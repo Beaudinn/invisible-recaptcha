@@ -9,12 +9,12 @@ class InvisibleReCaptcha
 {
     const API_URI = 'https://www.google.com/recaptcha/api.js';
     const VERIFY_URI = 'https://www.google.com/recaptcha/api/siteverify';
-    const POLYFILL_URI = 'https://cdn.polyfill.io/v2/polyfill.min.js';
-    const DEBUG_ELEMENTS = [
-        '_submitForm',
-        '_captchaForm',
-        '_captchaSubmit'
-    ];
+//    const POLYFILL_URI = 'https://cdn.polyfill.io/v2/polyfill.min.js';
+//    const DEBUG_ELEMENTS = [
+//        '_submitForm',
+//        '_captchaForm',
+//        '_captchaSubmit'
+//    ];
 
     /**
      * The reCaptcha site key.
@@ -41,6 +41,14 @@ class InvisibleReCaptcha
      * @var \GuzzleHttp\Client
      */
     protected $client;
+
+
+    /**
+     * Rendered number in total.
+     *
+     * @var integer
+     */
+    protected $renderedTimes = 0;
 
     /**
      * InvisibleReCaptcha.
@@ -70,7 +78,8 @@ class InvisibleReCaptcha
      */
     public function getCaptchaJs($lang = null)
     {
-        return $lang ? static::API_URI . '?hl=' . $lang : static::API_URI;
+        $api = static::API_URI . '?onload=_captchaCallback&render=explicit';
+        return $lang ? $api . '&hl=' . $lang : $api;
     }
 
     /**
@@ -107,19 +116,35 @@ class InvisibleReCaptcha
     }
 
     /**
-     * Render the captcha HTML.
+     * Render HTML reCaptcha by optional language param.
      *
      * @return string
      */
     public function renderCaptchaHTML()
     {
-        $html = '<div id="_g-recaptcha"></div>' . PHP_EOL;
-        if ($this->getOption('hideBadge', false)) {
-            $html .= '<style>.grecaptcha-badge{display:none;!important}</style>' . PHP_EOL;
+        $html = '';
+        if ($this->renderedTimes === 0) {
+            $html .= $this->initRenderCaptchaHTML();
+        } else {
+            $this->renderedTimes++;
         }
+        $html .= "<div class='_g-recaptcha' id='_g-recaptcha_{$this->renderedTimes}'></div>" . PHP_EOL;
+        return $html;
+    }
 
-        $html .= '<div class="g-recaptcha" data-sitekey="' . $this->siteKey .'" ';
-        $html .= 'data-size="invisible" data-callback="_submitForm" data-badge="' . $this->getOption('dataBadge', 'bottomright') . '"></div>';
+    /**
+     * Render the captcha HTML.
+     *
+     * @return string
+     */
+    public function initRenderCaptchaHTML()
+    {
+        $html = '';
+//        if ($this->getOption('hideBadge', false)) {
+//            $html .= '<style>.grecaptcha-badge{display:none;!important}</style>' . PHP_EOL;
+//        }
+
+        $this->renderedTimes++;
         return $html;
     }
 
@@ -130,24 +155,17 @@ class InvisibleReCaptcha
      */
     public function renderFooterJS($lang = null)
     {
-        $html = '<script src="' . $this->getCaptchaJs($lang) . '" async defer></script>' . PHP_EOL;
-        $html .= '<script>var _submitForm,_captchaForm,_captchaSubmit,_execute=true;</script>';
-        $html .= "<script>window.addEventListener('load', _loadCaptcha);" . PHP_EOL;
-        $html .= "function _loadCaptcha(){";
-        if ($this->getOption('hideBadge', false)) {
-            $html .= "document.querySelector('.grecaptcha-badge').style = 'display:none;!important'" . PHP_EOL;
-        }
-        $html .= '_captchaForm=document.querySelector("#_g-recaptcha").closest("form");';
-        $html .= "_captchaSubmit=_captchaForm.querySelector('[type=submit]');";
-        $html .= '_submitForm=function(){if(typeof _submitEvent==="function"){_submitEvent();';
-        $html .= 'grecaptcha.reset();}else{_captchaForm.submit();}};';
-        $html .= "_captchaForm.addEventListener('submit',";
-        $html .= "function(e){e.preventDefault();if(typeof _beforeSubmit==='function'){";
-        $html .= "_execute=_beforeSubmit(e);}if(_execute){grecaptcha.execute();}});";
-        if ($this->getOption('debug', false)) {
-            $html .= $this->renderDebug();
-        }
-        $html .= "}</script>" . PHP_EOL;
+        $html = '<script>var _renderedTimes,_captchaCallback,_captchaForms,_submitForm,_submitBtn;</script>';
+        $html .= '<script>var _submitAction=true,_captchaForm;</script>';
+        $html .= "<script>$.getScript('{$this->getCaptchaJs($lang)}').done(function(data,status,jqxhr){";
+        $html .= '_renderedTimes=$("._g-recaptcha").length;_captchaForms=$("._g-recaptcha").closest("form");';
+        $html .= '_captchaForms.each(function(){$(this)[0].addEventListener("submit",function(e){e.preventDefault();';
+        $html .= '_captchaForm=$(this);_submitBtn=$(this).find(":submit");grecaptcha.execute();});});';
+        $html .= '_submitForm=function(){_submitBtn.trigger("captcha");if(_submitAction){_captchaForm.submit();}grecaptcha.reset();};';
+        $html .= '_captchaCallback=function(){$("._g-recaptcha").each(function(index){grecaptcha.render(this,';
+        $html .= "{sitekey:'{$this->siteKey}',size:'invisible',callback:_submitForm});});}";
+        $html .= '});</script>' . PHP_EOL;
+
         return $html;
     }
 
@@ -190,16 +208,13 @@ class InvisibleReCaptcha
         if (empty($response)) {
             return false;
         }
-
         $response = $this->sendVerifyRequest([
             'secret' => $this->secretKey,
             'remoteip' => $clientIp,
             'response' => $response
         ]);
-
         return isset($response['success']) && $response['success'] === true;
     }
-
     /**
      * Verify invisible reCaptcha response by Symfony Request.
      *
@@ -227,7 +242,6 @@ class InvisibleReCaptcha
         $response = $this->client->post(static::VERIFY_URI, [
             'form_params' => $query,
         ]);
-
         return json_decode($response->getBody(), true);
     }
 
@@ -313,5 +327,15 @@ class InvisibleReCaptcha
     public function getClient()
     {
         return $this->client;
+    }
+
+    /**
+     * Getter function of rendered times
+     *
+     * @return strnig
+     */
+    public function getRenderedTimes()
+    {
+        return $this->renderedTimes;
     }
 }
